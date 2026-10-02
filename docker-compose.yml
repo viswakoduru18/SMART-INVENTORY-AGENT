@@ -1,0 +1,46 @@
+# Production-shaped stack: Postgres + API/console + a single scheduler process (batch window + agents).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: smart_inventory
+      POSTGRES_USER: smart_inventory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_inventory"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://smart_inventory:${POSTGRES_PASSWORD:-change-me}@db:5432/smart_inventory
+      SCHEDULER_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/config:ro
+      - erp_drop:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+  scheduler:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://smart_inventory:${POSTGRES_PASSWORD:-change-me}@db:5432/smart_inventory
+    command: ["python", "-m", "smart_inventory.cli", "scheduler"]
+    volumes:
+      - ./config:/app/config:ro
+      - erp_drop:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  erp_drop:

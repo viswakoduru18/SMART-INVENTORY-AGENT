@@ -1,0 +1,116 @@
+# Business policy for the Predictive Distribution Intelligence Platform.
+# Every threshold the engines use lives here so procurement / finance can tune
+# behaviour without a code change. Values are starting defaults and MUST be
+# re-tuned on Acintyo data after the Phase 0 baseline.
+
+version: "policy-2026.10.1"
+
+# Graduated autonomy: SHADOW -> ASSIST -> AUTO
+#   SHADOW: decisions are computed and logged; nothing is published or pushed.
+#   ASSIST: drafts (PO, price offers) wait for human approval in the console.
+#   AUTO:   PO drafts for classes in auto_po_classes are auto-approved and pushed
+#           to the ERP when forecast accuracy gates pass; everything else = ASSIST.
+autonomy:
+  mode: ASSIST
+  auto_po_classes: [FAST]
+  auto_po_gate_max_wape: 0.35      # class WAPE over the trailing window must be below this
+  auto_po_max_value_inr: 50000     # single line above this value always needs a human
+
+classification:
+  history_days: 180
+  adi_threshold: 1.32              # Syntetos-Boylan
+  cv2_threshold: 0.49
+  slow_adi_threshold: 4.0          # intermittent SKUs with ADI above this are SLOW, else MEDIUM
+  erratic_fast_min_events_30d: 15  # erratic SKUs with fewer demand days in 30d drop to MEDIUM
+  sporadic_max_events: 2           # 1-2 demand events in history window -> SPORADIC
+  sporadic_single_retailer_max_events: 4
+  critical_min_bounces_90d: 3      # UNRECOVERED bounces (sourcing failed) in 90 days
+  critical_min_distinct_retailers: 2
+  hysteresis_days: 14              # two weekly confirmations before a class change
+  immediate_classes: [CRITICAL_HARD_TO_SOURCE]
+  pooling_min_history_days: 30     # newer SKUs borrow class from their composition group
+
+bounce:
+  regular_min_bounces_90d: 4
+  regular_min_distinct_weeks: 3
+  easy_sourcing_success_rate: 0.70
+  shortage_sourcing_success_rate: 0.20
+  shortage_min_attempts: 3
+
+forecast:
+  backtest_weeks: 8
+  min_history_days_ml: 90
+  p90_z: 1.2816
+  croston_alpha: 0.1
+  tsb_beta: 0.1
+  critical_uplift: 1.15
+
+replenishment:
+  service_levels:                  # z derived from these
+    FAST: 0.95
+    MEDIUM: 0.90
+    CRITICAL_HARD_TO_SOURCE: 0.98
+    SLOW: 0.0
+    SPORADIC: 0.0
+    NON_MOVING: 0.0
+  stocking_candidate_service_level: 0.90
+  cover_days:                      # demand horizon the PO covers (1-2 day predictive model)
+    FAST: 2
+    MEDIUM: 2
+    CRITICAL_HARD_TO_SOURCE: 3
+  bounce_uplift_days: 1.0          # extra days of bounce rate added when sourcing is DIFFICULT
+  min_shelf_life_sell_through_ratio: 0.5   # never buy more than sells in 50% of residual shelf life
+  working_capital_cap_inr:         # per warehouse, per daily PO
+    default: 1500000
+  near_expiry_days_excluded_from_on_hand: 30
+
+bounce_to_stock:
+  carrying_cost_annual_pct: 18.0
+  expected_retention_factor: 0.6   # share of lost asks recaptured if we stock
+  top_retailer_weight: 1.5
+  limited_stock_days: 7            # limited safety stock target for rare + difficult SKUs
+  minimum_stock_days: 3            # minimum inventory for repeated-bounce SKUs
+  sourcing_overhead_pct: 1.5       # cost of serving an ask via outside sourcing (expediting, wait), % of value
+
+pricing:
+  fast_target_discount_pct: 8.0    # cohort benchmark; tune per category after price tests
+  fast_leakage_tolerance_pct: 0.5
+  liquidation_min_recovery_pct: 85 # liquidation lots may go below margin floor down to this % of cost
+  min_residual_shelf_life_days_for_sale: 30
+  max_retailer_special_exposure_inr: 50000
+  special_exposure_window_days: 90
+  tiers:                           # evaluated top-down, first match wins
+    - name: LIQUIDATE_T3
+      max_days_to_expiry: 90
+      extra_discount_pct: 7.0
+      action: LIQUIDATE
+    - name: LIQUIDATE_T2
+      max_days_to_expiry: 150
+      extra_discount_pct: 4.0
+      action: LIQUIDATE
+    - name: SLOW_T1
+      min_age_days: 60
+      extra_discount_pct: 2.0
+      action: DISCOUNT
+    - name: SLOW_T0
+      min_age_days: 0
+      extra_discount_pct: 1.0
+      action: DISCOUNT
+  supplier_return_window_days: 120 # check supplier return/expiry credit before discounting
+
+sourcing:
+  min_residual_shelf_life_days: 90
+  max_purchase_price_pct_of_mrp: 80   # hard price ceiling for external purchases
+  offer_freshness_hours: 48
+  default_eta_hours: 6
+
+schedule:                          # IST batch window (architecture doc 4.3)
+  timezone: Asia/Kolkata
+  erp_sync: "23:30"
+  classification: "00:30"
+  forecast_buffer: "01:30"
+  stock_pricing: "03:00"
+  orchestrator: "04:00"
+  publish_po: "06:30"
+  po_failure_alert: "05:30"
+  intraday_sync_minutes: 15

@@ -1,0 +1,199 @@
+# Acintyo ERP connector configuration.
+#
+# This is the ONLY file you edit to plug the platform into the existing ERP.
+# 1. Set connector: rest (live API), csv (scheduled extract drop folder) or mock (demo data).
+# 2. Fill base_url and auth (secrets come from environment variables, never this file).
+# 3. For each resource, set the ERP endpoint path and map ERP field names (right side)
+#    to the platform's canonical fields (left side). Dotted paths reach nested JSON.
+#
+# Resources marked "write" receive drafts only: the ERP stays the system of record.
+
+connector: mock          # rest | csv | mock
+
+rest:
+  base_url: ${ERP_BASE_URL}
+  timeout_seconds: 30
+  auth:
+    type: bearer          # bearer | api_key | basic | none
+    token_env: ERP_API_TOKEN
+    api_key_header: X-API-Key
+    api_key_env: ERP_API_KEY
+    username_env: ERP_USERNAME
+    password_env: ERP_PASSWORD
+  pagination:
+    style: page           # page | offset | cursor | none
+    page_param: page
+    size_param: page_size
+    page_size: 500
+    cursor_param: cursor
+    next_cursor_path: next_cursor
+  since_param: updated_since   # incremental extract parameter (ISO timestamp)
+
+  resources:
+    warehouses:
+      path: /api/v1/warehouses
+      records_path: data
+      fields:
+        warehouse_id: code
+        name: name
+        working_capital_cap_inr: wc_limit
+
+    skus:
+      path: /api/v1/items
+      records_path: data
+      fields:
+        sku_id: item_code
+        name: item_name
+        composition: salt_composition
+        pack: pack_size_label
+        pack_size: pack_qty
+        mrp: mrp
+        ptr: ptr
+        cost: purchase_rate
+        schedule: drug_schedule
+        manufacturer: company_name
+        shelf_life_days: shelf_life_days
+        moq: min_order_qty
+        normal_discount_pct: default_discount
+        margin_floor_pct: min_margin_pct
+        price_ceiling: dpco_ceiling_price
+
+    retailers:
+      path: /api/v1/customers
+      records_path: data
+      fields:
+        retailer_id: customer_code
+        name: firm_name
+        city: city
+        is_top_account: key_account
+        credit_status: credit_status
+        drug_licence_no: dl_number
+
+    suppliers:
+      path: /api/v1/suppliers
+      records_path: data
+      fields:
+        supplier_id: supplier_code
+        name: supplier_name
+        approved: is_approved
+        licence_valid_until: dl_valid_upto
+        gst_compliant: gst_verified
+        lead_time_days: avg_lead_days
+        lead_time_std_days: lead_days_std
+        return_rights: accepts_expiry_returns
+        channel: order_channel
+        contact: whatsapp_number
+
+    order_lines:
+      path: /api/v1/sales/lines
+      records_path: data
+      incremental: true
+      fields:
+        order_id: invoice_no
+        line_id: line_id
+        retailer_id: customer_code
+        sku_id: item_code
+        warehouse_id: branch_code
+        qty: qty
+        price: rate
+        discount_pct: disc_pct
+        channel: source
+        ts: invoice_datetime
+        term_flag: return_terms
+
+    bounces:
+      path: /api/v1/orders/not-available
+      records_path: data
+      incremental: true
+      fields:
+        bounce_id: id
+        order_line_id: order_line_ref
+        sku_id: item_code
+        retailer_id: customer_code
+        warehouse_id: branch_code
+        qty: requested_qty
+        reason_code: reason
+        ts: created_at
+
+    inventory:
+      path: /api/v1/stock/batches
+      records_path: data
+      fields:
+        warehouse_id: branch_code
+        sku_id: item_code
+        batch: batch_no
+        expiry: expiry_date
+        qty: closing_qty
+        cost: purchase_rate
+        inward_date: grn_date
+        supplier_id: supplier_code
+        on_hold: quarantine
+
+    open_pos:
+      path: /api/v1/purchase/open-orders
+      records_path: data
+      fields:
+        po_id: po_no
+        warehouse_id: branch_code
+        sku_id: item_code
+        supplier_id: supplier_code
+        qty: pending_qty
+        expected_date: due_date
+
+    supplier_prices:
+      path: /api/v1/purchase/price-list
+      records_path: data
+      fields:
+        supplier_id: supplier_code
+        sku_id: item_code
+        price: rate
+        scheme: scheme
+        available_qty: stock_qty
+        batch: batch_no
+        expiry: expiry_date
+
+    # ---- write-back (drafts only) ----
+    po_draft:
+      method: POST
+      path: /api/v1/purchase/draft-orders
+      response_ref_path: data.po_no
+      fields:                 # canonical -> ERP request field
+        warehouse_id: branch_code
+        supplier_id: supplier_code
+        sku_id: item_code
+        qty: qty
+        unit_cost: rate
+        reason_code: remarks
+        status: status        # always "DRAFT"
+
+    price_rule:
+      method: POST
+      path: /api/v1/pricing/offer-rules
+      response_ref_path: data.rule_id
+      fields:
+        sku_id: item_code
+        warehouse_id: branch_code
+        batch: batch_no
+        discount_pct: disc_pct
+        term_flag: return_terms
+        valid_from: valid_from
+        valid_to: valid_to
+
+    live_stock:               # optional: real-time check used by /availability
+      path: /api/v1/stock/available
+      params: {item_code: "{sku_id}", branch_code: "{warehouse_id}"}
+      records_path: data
+      fields:
+        qty: available_qty
+
+csv:
+  directory: ./data/erp_drop  # nightly extracts: warehouses.csv, skus.csv, retailers.csv, suppliers.csv,
+                              # order_lines.csv, bounces.csv, inventory.csv, open_pos.csv, supplier_prices.csv
+  outbox: ./data/erp_outbox   # PO drafts and price rules are written here for ERP import
+
+mock:
+  seed: 42
+  skus: 400
+  retailers: 150
+  suppliers: 10
+  history_days: 200
