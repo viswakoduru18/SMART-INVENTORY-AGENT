@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Acintyo Distribution Console</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath d='M9 22l7-13 7 13' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-row">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">A</div>
+        <div class="brand-text">
+          <div class="brand-name">Acintyo Distribution Intelligence</div>
+          <div class="brand-sub" id="brand-sub">Predictive Distribution Intelligence Platform</div>
+        </div>
+      </div>
+      <div class="controls">
+        <label class="ctl">
+          <span>Warehouse</span>
+          <select id="wh-select" aria-label="Warehouse">
+            <option value="">All warehouses</option>
+            <option value="HYD01">HYD01 · Hyderabad</option>
+            <option value="NMB01">NMB01 · Navi Mumbai</option>
+          </select>
+        </label>
+        <label class="ctl">
+          <span>Run date</span>
+          <input type="date" id="date-input" aria-label="Run date">
+        </label>
+        <label class="ctl ctl-key">
+          <span>API key</span>
+          <input type="password" id="key-input" placeholder="dev mode (none)" autocomplete="off" aria-label="API key">
+        </label>
+        <span class="mode-badge" id="mode-badge" title="Autonomy mode">…</span>
+      </div>
+    </div>
+    <div class="banner" id="shadow-banner" hidden>Shadow mode: nothing is written to the ERP</div>
+    <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+  </header>
+
+  <main id="view" aria-live="polite">
+    <div class="loading"><span class="spinner"></span>Loading console…</div>
+  </main>
+
+  <div class="scrim" id="drawer-scrim" hidden></div>
+  <aside class="drawer" id="drawer" hidden aria-label="SKU 360" role="dialog" aria-modal="true">
+    <div class="drawer-head">
+      <div>
+        <h2 id="drawer-title">SKU 360</h2>
+        <div class="sub" id="drawer-sub"></div>
+      </div>
+      <button class="btn sm close" type="button" data-act="close-drawer" aria-label="Close">Close</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+
+  <div id="modal-root"></div>
+  <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

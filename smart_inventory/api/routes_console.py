@@ -183,6 +183,16 @@ def approve_offer(offer_id: str, db: Session = Depends(get_db), p: Principal = D
     return {"offer_id": o.offer_id, "status": o.status, "erp_ref": o.erp_ref}
 
 
+@router.get("/experiments/{offer_id}", tags=["pricing"])
+def experiment(offer_id: str, db: Session = Depends(get_db), _: Principal = Depends(require(*("management", "procurement")))):
+    """Price-test readout by arm (test vs holdout control)."""
+    from ..engines import pricing
+    try:
+        return pricing.experiment_readout(db, offer_id)
+    except KeyError:
+        raise HTTPException(404, "price test not found") from None
+
+
 @router.post("/price-offers/{offer_id}/reject", tags=["pricing"])
 def reject_offer(offer_id: str, body: Reject, db: Session = Depends(get_db), p: Principal = Depends(require("procurement"))):
     o = db.get(PriceOffer, offer_id)

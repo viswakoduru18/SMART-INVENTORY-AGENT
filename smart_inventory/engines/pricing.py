@@ -14,6 +14,7 @@ a per-retailer cap on special-term exposure.
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import date, timedelta
 from typing import Any
 
@@ -178,6 +179,16 @@ def checkout_options(db: Session, policy: Policy, retailer_id: str, sku_id: str,
         "net_price": round(base * (1 - sku.normal_discount_pct / 100), 2), "returnable": True,
         "terms": "Normal discount with normal return / GRB terms",
     }]
+    test = db.scalar(select(PriceOffer).where(
+        PriceOffer.sku_id == sku_id, PriceOffer.warehouse_id == warehouse_id, PriceOffer.kind == "PRICE_TEST",
+        PriceOffer.status.in_(["APPROVED", "PUBLISHED"]), PriceOffer.valid_from <= today, PriceOffer.valid_to >= today,
+    ))
+    if test is not None:
+        arm = experiment_arm(retailer_id, test.offer_id)
+        options[0]["experiment"] = {"offer_id": test.offer_id, "arm": arm}
+        if arm == "TEST":
+            options[0]["discount_pct"] = test.discount_pct
+            options[0]["net_price"] = round(base * (1 - test.discount_pct / 100), 2)
     cfg = policy.section("pricing")
     exposure = special_exposure(db, retailer_id, today, int(cfg.get("special_exposure_window_days", 90)))
     cap = float(cfg.get("max_retailer_special_exposure_inr", 50000))
@@ -200,6 +211,36 @@ def checkout_options(db: Session, policy: Policy, retailer_id: str, sku_id: str,
             })
     return {"sku_id": sku_id, "retailer_id": retailer_id, "warehouse_id": warehouse_id, "options": options,
             "special_exposure_inr": round(exposure, 2), "special_exposure_cap_inr": cap, "special_blocked_reason": blocked}
+
+
+def experiment_arm(retailer_id: str, offer_id: str, test_share: int = 50) -> str:
+    """Deterministic, sticky assignment of a retailer to a price-test arm (no state to store)."""
+    h = int(hashlib.sha256(f"{offer_id}:{retailer_id}".encode()).hexdigest(), 16) % 100
+    return "TEST" if h < test_share else "CONTROL"
+
+
+def experiment_readout(db: Session, offer_id: str) -> dict[str, Any]:
+    """Per-arm volume, revenue and margin for a price test. Order lines must carry the experiment offer_id."""
+    offer = db.get(PriceOffer, offer_id)
+    if offer is None or offer.kind != "PRICE_TEST":
+        raise KeyError(offer_id)
+    sku = db.get(Sku, offer.sku_id)
+    lines = db.scalars(select(OrderLine).where(OrderLine.offer_id == offer_id)).all()
+    arms: dict[str, dict[str, float]] = {}
+    for ln in lines:
+        arm = experiment_arm(ln.retailer_id, offer_id)
+        a = arms.setdefault(arm, {"retailers": set(), "lines": 0, "qty": 0.0, "revenue": 0.0, "margin": 0.0})
+        rev = ln.qty * ln.price * (1 - ln.discount_pct / 100)
+        a["retailers"].add(ln.retailer_id)
+        a["lines"] += 1
+        a["qty"] += ln.qty
+        a["revenue"] += rev
+        a["margin"] += rev - ln.qty * (sku.cost if sku else 0.0)
+    out = {arm: {**{k: round(v, 2) for k, v in a.items() if k != "retailers"}, "retailers": len(a["retailers"]),
+                 "qty_per_retailer": round(a["qty"] / max(len(a["retailers"]), 1), 2)} for arm, a in arms.items()}
+    return {"offer_id": offer_id, "sku_id": offer.sku_id, "warehouse_id": offer.warehouse_id, "test_discount_pct": offer.discount_pct,
+            "baseline_discount_pct": offer.normal_discount_pct, "valid_to": offer.valid_to.isoformat(), "arms": out,
+            "decision_rule": "Adopt only if TEST keeps qty per retailer and wallet share within tolerance of CONTROL while margin improves."}
 
 
 def grb_allowed(db: Session, order_id: str, line_id: str) -> dict[str, Any]:

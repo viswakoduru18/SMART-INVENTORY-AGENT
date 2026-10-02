@@ -13,6 +13,7 @@ latest acceptable completion times, tracked in job_run.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -27,6 +28,7 @@ from ..integrations import get_connector, notifications
 from ..models import JobRun
 
 log = logging.getLogger(__name__)
+_cycle_lock = threading.Lock()  # nightly cycle and intraday sync must never write concurrently
 
 
 def _tz() -> ZoneInfo:
@@ -42,7 +44,7 @@ def nightly_cycle() -> None:
 
     day = _plan_date()
     log.info("nightly cycle for %s", day)
-    with session_scope() as db:
+    with _cycle_lock, session_scope() as db:
         run_daily_cycle(db, day, erp=get_connector())
 
 
@@ -69,10 +71,16 @@ def intraday_sync() -> None:
     from ..engines import sourcing
     from .ingest import sync_facts
 
-    day = datetime.now(_tz()).date()
-    with session_scope() as db:
-        sync_facts(db, get_connector(), day)
-        sourcing.expire_open_requests(db, get_policy(), day)
+    if not _cycle_lock.acquire(blocking=False):
+        log.info("intraday sync skipped: decision cycle running")
+        return
+    try:
+        day = datetime.now(_tz()).date()
+        with session_scope() as db:
+            sync_facts(db, get_connector(), day)
+            sourcing.expire_open_requests(db, get_policy(), day)
+    finally:
+        _cycle_lock.release()
 
 
 def _cron(hhmm: str, tz: ZoneInfo) -> CronTrigger:

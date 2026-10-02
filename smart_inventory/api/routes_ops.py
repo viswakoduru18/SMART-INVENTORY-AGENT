@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import analytics
-from ..agents import llm, supplier_parser
+from ..agents import llm, regulatory, supplier_parser
 from ..config import get_policy
 from ..engines import pricing, sourcing
 from ..engines.compliance import effective_price, gate_supplier_offer
@@ -334,3 +334,21 @@ def release_hold(hold_id: int, db: Session = Depends(get_db), _: Principal = Dep
     h.active = False
     db.commit()
     return {"id": h.id, "active": False}
+
+
+class AlertIn(BaseModel):
+    text: str = Field(min_length=10, max_length=200000)
+    source: str = Field(default="CDSCO", max_length=50)
+
+
+@router.post("/compliance/alerts/parse", tags=["compliance", "agents"])
+def parse_alert(body: AlertIn, db: Session = Depends(get_db), _: Principal = Depends(require("procurement"))):
+    """Claude reads a CDSCO / state FDA NSQ or recall notice. Batches found in our stock are held at once (P0 path);
+    SKU-level matches come back as proposed holds for a human to confirm via POST /compliance/holds."""
+    try:
+        out = regulatory.process_alert(db, body.text, body.source, business_today())
+    except llm.LLMUnavailable as exc:
+        db.commit()
+        raise HTTPException(503, f"Claude unavailable: {exc}. Add holds manually via POST /api/v1/compliance/holds.") from exc
+    db.commit()
+    return out

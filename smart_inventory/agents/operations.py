@@ -41,6 +41,10 @@ failure and the owner. Use Rs and lakh. Never claim an action was taken unless a
 change prices; say what needs human approval."""
 
 
+def _pct(v: float | None) -> str:
+    return "n/a" if v is None else f"{v * 100:.1f}%"
+
+
 def deterministic_briefing(db: Session, day: date) -> str:
     k = analytics.kpis(db, day)
     p = analytics.purchase_view(db, day, limit=5)
@@ -52,7 +56,8 @@ def deterministic_briefing(db: Session, day: date) -> str:
         f"Acintyo daily brief {day.isoformat()} - {status}",
         f"PO drafts: {p['po_lines']} lines, Rs{(p['po_value'] or 0) / 1e5:.2f} lakh ({p['po_by_status']}).",
         f"Forecast: tomorrow {p['tomorrow_demand_units']:.0f} units (Rs{(p['tomorrow_demand_value'] or 0) / 1e5:.2f} lakh), 2-day {p['two_day_demand_units']:.0f}.",
-        f"Fill rate 30d: {k['availability']['fill_rate_line_30d']}, bounce rate {k['availability']['bounce_rate_30d']}, "
+        f"Fill rate 30d: {_pct(k['availability']['fill_rate_line_30d'])}, bounce rate {_pct(k['availability']['bounce_rate_30d'])}, "
+        f"bounce recovery {_pct(k['availability']['bounce_recovery_rate_30d'])}, "
         f"revenue lost 30d Rs{(k['availability']['revenue_lost_30d'] or 0) / 1e5:.2f} lakh.",
     ]
     for t in b["top_bounced"][:3]:

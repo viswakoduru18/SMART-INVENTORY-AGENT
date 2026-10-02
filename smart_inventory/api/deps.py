@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Query, status
 
 from ..config import get_settings
 from ..db import get_db  # noqa: F401  (re-export)
@@ -31,10 +31,12 @@ class Principal:
         return f"{self.role}:{self.key_hint}"
 
 
-def principal(x_api_key: str | None = Header(default=None)) -> Principal:
+def principal(x_api_key: str | None = Header(default=None), api_key: str | None = Query(default=None, include_in_schema=False)) -> Principal:
+    """X-API-Key header; `?api_key=` is accepted as a fallback for webhook providers that cannot set headers."""
     keys = _keys()
     if not keys:
         return Principal("admin", "dev")  # development mode: open
+    x_api_key = x_api_key or api_key
     if not x_api_key or x_api_key not in keys:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing or invalid X-API-Key")
     return Principal(keys[x_api_key], x_api_key[-4:])

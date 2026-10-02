@@ -306,3 +306,42 @@ def test_role_based_auth(client, monkeypatch):
     assert client.post("/api/v1/admin/run-cycle", json={}, headers={"X-API-Key": "boss-key"}).status_code == 403
     assert client.get("/api/v1/returns/check", params={"order_id": "x"}, headers={"X-API-Key": "portal-key"}).status_code == 200
     assert client.get("/api/v1/meta").status_code == 200
+
+
+def test_price_test_arms_and_readout(client, db):
+    from smart_inventory.engines.pricing import experiment_arm
+
+    t = db.scalar(select(PriceOffer).where(PriceOffer.date == TODAY, PriceOffer.kind == "PRICE_TEST", PriceOffer.status == "PROPOSED"))
+    assert client.post(f"/api/v1/price-offers/{t.offer_id}/approve").json()["status"] == "APPROVED"
+    arms = {}
+    for i in range(1, 40):
+        rid = f"RET{i:04d}"
+        opt = client.get("/api/v1/offers", params={"retailer_id": rid, "sku_id": t.sku_id, "warehouse_id": t.warehouse_id}).json()["options"][0]
+        assert opt["experiment"]["arm"] == experiment_arm(rid, t.offer_id)  # sticky + deterministic
+        arms.setdefault(opt["experiment"]["arm"], opt["discount_pct"])
+        client.post("/api/v1/events", json={"event_id": f"exp-{i}", "type": "order_line", "retailer_id": rid, "sku_id": t.sku_id,
+                                             "warehouse_id": t.warehouse_id, "qty": 2, "order_id": f"EXP{i}", "line_id": "1",
+                                             "discount_pct": opt["discount_pct"], "offer_id": t.offer_id})
+    assert set(arms) == {"TEST", "CONTROL"} and arms["TEST"] == t.discount_pct
+    r = client.get(f"/api/v1/experiments/{t.offer_id}").json()
+    assert set(r["arms"]) == {"TEST", "CONTROL"} and r["arms"]["TEST"]["lines"] + r["arms"]["CONTROL"]["lines"] == 39
+
+
+def test_regulatory_alert_holds_batch_in_stock(client, db, fake_llm):
+    from smart_inventory.models import ComplianceHold, InventoryBatch
+
+    b = db.scalar(select(InventoryBatch).where(InventoryBatch.on_hold.is_(False), InventoryBatch.qty > 0).offset(7))
+    sku = db.get(Sku, b.sku_id)
+    other = db.scalar(select(Sku).where(Sku.sku_id != sku.sku_id, Sku.composition != sku.composition))
+    payload = {"issuer": "CDSCO", "alerts": [
+        {"product_name": sku.name, "composition": sku.composition, "manufacturer": sku.manufacturer, "batch": b.batch.lower(), "reason": "NSQ - assay"},
+        {"product_name": other.name, "composition": other.composition, "manufacturer": other.manufacturer, "batch": "ZZ9999", "reason": "NSQ"},
+    ]}
+    fake_llm([message([block_text(json.dumps(payload))])])
+    r = client.post("/api/v1/compliance/alerts/parse", json={"text": "CDSCO NSQ list ...", "source": "CDSCO"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["holds_applied"][0]["batch"] == b.batch and body["proposed_holds"][0]["sku_id"] == other.sku_id
+    db.expire_all()
+    assert db.get(InventoryBatch, b.id).on_hold is True
+    assert db.scalar(select(ComplianceHold).where(ComplianceHold.batch == b.batch, ComplianceHold.active.is_(True))) is not None

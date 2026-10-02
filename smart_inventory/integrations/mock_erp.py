@@ -342,7 +342,7 @@ class MockERPConnector(ERPConnector):
         all_sup = [s["supplier_id"] for s in suppliers]
         for sku in skus:
             arch = sku["_archetype"]
-            n = int(rng.integers(1, 4))
+            n = int(rng.integers(2, 5))
             for sid in rng.choice(all_sup, size=n, replace=False):
                 avail = float(rng.integers(0, 200))
                 if arch == "hard":
@@ -350,7 +350,7 @@ class MockERPConnector(ERPConnector):
                 if arch == "bounce_only_regular":
                     avail = float(rng.choice([0, 20, 50]))
                 scheme = str(rng.choice(["", "", "", "10+1", "5%", "20+3"]))
-                dte = int(rng.choice([45, 200, 400, 600]))
+                dte = int(rng.choice([45, 300, 400, 500, 600, 700, 700, 540, 365, 420]))  # ~10% short-dated lots
                 supplier_prices.append({
                     "supplier_id": str(sid),
                     "sku_id": sku["sku_id"],

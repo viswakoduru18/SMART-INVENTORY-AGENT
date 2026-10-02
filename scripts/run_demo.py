@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,7 +48,8 @@ def main() -> None:
     for i in range(a.days - 1, -1, -1):
         day = today - timedelta(days=i)
         with dbm.session_scope() as s:
-            out = run_daily_cycle(s, day, erp=erp, sync=(i == a.days - 1), full_sync=True, enforce_dq=False)
+            # full sync on the first day; re-sync on the last day so the stock snapshot is fresh
+            out = run_daily_cycle(s, day, erp=erp, sync=i in (0, a.days - 1), full_sync=(i == a.days - 1), enforce_dq=False)
         print(f"  {day}: {out['orchestrator']['by_action']}")
 
     print("Simulating live retailer bounces through the sourcing engine...")
@@ -61,10 +62,12 @@ def main() -> None:
             bid = f"DEMO-BNC-{i}"
             s.add(BounceEvent(bounce_id=bid, sku_id=sku.sku_id, retailer_id=f"RET{i + 1:04d}", warehouse_id="HYD01", qty=2,
                               reason_code="NOT_IN_STOCK", sourcing_attempted=True, outcome="pending",
-                              ts=__import__("datetime").datetime.utcnow()))
+                              ts=datetime.utcnow()))
             s.flush()
             req = sourcing.open_request(s, get_policy(), sku.sku_id, "HYD01", f"RET{i + 1:04d}", 2, today, bounce_id=bid)
-            print(f"  {sku.name:35} -> {req.status:7} {('ETA %.0fh' % req.eta_hours) if req.eta_hours else (req.failure_reason or '')}")
+            note = f"ETA {req.eta_hours:.0f}h, retailer told 'Available on request'" if req.status == "HELD" else (
+                f"inquiry sent to WhatsApp suppliers ({req.failure_reason})" if req.status == "OPEN" else req.failure_reason)
+            print(f"  {sku.name:35} -> {req.status:7} {note}")
 
     print("\nOperations agent briefing (Claude if ANTHROPIC_API_KEY is set, deterministic runbook otherwise):\n")
     with dbm.session_scope() as s:

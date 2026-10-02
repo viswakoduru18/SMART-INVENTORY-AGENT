@@ -45,9 +45,10 @@ Stock quantities, prices, discounts and PO values are **deterministic and audita
 | Agent | Job | Without an API key |
 |---|---|---|
 | **Supplier Parser** | Supplier WhatsApp/email/price-list text → schema-validated offers → conservative SKU matching (never crosses manufacturer or pack) → hard gates → re-runs open sourcing | 503 with a pointer to manual entry |
-| **Decision Explainer** | "Why was a PO raised for SKU X?" in **English or Telugu**, citing the decision's own inputs | Deterministic template explanation |
+| **Decision Explainer** | "Why was a PO raised for SKU X?" in **English or Telugu**, citing the decision's own inputs | Deterministic template explanation (English) |
 | **Insights** | Natural-language questions over the dashboards (read-only tools) | 503 |
 | **Operations** | Runs the daily cycle, sweeps sourcing, checks approvals and data quality, sends the morning WhatsApp briefing. **Cannot** approve POs or change prices | Same runbook, executed deterministically, templated briefing |
+| **Regulatory Alert** | CDSCO / state-FDA NSQ, spurious and recall notices → batches found in our stock are **held at once** (P0); SKU-level matches are proposed for human confirmation | 503 with a pointer to manual holds |
 
 The platform runs fully without Claude. Agents add speed and convenience, not correctness.
 
@@ -117,7 +118,7 @@ Interactive docs are at `/docs`. Auth uses the `X-API-Key` header, with roles ad
 |---|---|
 | Channels (portal/app/WhatsApp) | `POST /api/v1/events` · `GET /availability` · `GET /offers` · `POST /webhooks/whatsapp` |
 | ERP | `GET /returns/check` (GRB block) |
-| Procurement | `GET /decisions` · `POST /decisions/{id}/override` · `GET /po-drafts` · `POST /po-drafts/{id}/approve` · `/reject` · `/approve-bulk` · `GET/POST /price-offers/{id}/approve` · `GET /sourcing/queue` · `POST /sourcing/requests/{id}/{action}` · `POST /supplier-offers` · `POST /supplier-offers/parse` · `POST/DELETE /compliance/holds` |
+| Procurement | `GET /decisions` · `POST /decisions/{id}/override` · `GET /po-drafts` · `POST /po-drafts/{id}/approve` · `/reject` · `/approve-bulk` · `GET/POST /price-offers/{id}/approve` · `GET /experiments/{offer_id}` · `GET /sourcing/queue` · `POST /sourcing/requests/{id}/{action}` · `POST /supplier-offers` · `POST /supplier-offers/parse` · `POST/DELETE /compliance/holds` · `POST /compliance/alerts/parse` |
 | Management | `GET /dashboard/{kpis,inventory,bounce,purchase,margin}` · `GET /skus/{id}` |
 | Agents | `POST /agents/ask` · `GET /agents/explain/{decision_id}?lang=te` · `POST /agents/ops/run` |
 | Admin | `POST /admin/run-cycle` · `PUT /admin/policy/autonomy` · `GET /admin/jobs` · `/data-quality` · `/notifications` · `/erp/health` |
@@ -136,15 +137,26 @@ PYTHONPATH=. pytest -q                                                          
 DATABASE_URL=postgresql+psycopg2://user@host/db PYTHONPATH=. pytest -q          # PostgreSQL
 ```
 
-57 tests cover:
+59 tests, passing on both SQLite and PostgreSQL 16, cover:
 - every engine rule, including the spec's worked example
 - the compliance gates
 - the full cycle against the mock ERP **and** through the REST connector + reference ERP API
 - the real-time bounce → sourcing → retailer message flow
 - PO approve/edit/reject and push to ERP, with re-runs preserving human decisions
 - special-term checkout, the GRB block and the exposure cap
-- the P0 compliance hold
+- the P0 compliance hold and regulatory-alert batch holds
+- price-test arm assignment and readout
 - the agent tool loop (scripted Claude), agent degradation without Claude, supplier-message parsing, and role-based auth
+
+## Performance
+
+Measured on PostgreSQL 16 (4 vCPU, shared host):
+
+| Data | Full first run | Nightly (incremental) |
+|---|---|---|
+| 4,000 SKUs × 2 warehouses, 760k order lines (more than Acintyo's annual volume), 1,500 retailers | 99 s (53 s is the one-time initial load) | **47 s** |
+
+Engines scale roughly linearly with active SKU × warehouse pairs, which leaves wide headroom in the 23:30–06:30 window for 30–40k SKUs. Set `ML_THREADS` (default 1). Uncapped OpenMP threads made a 0.2 s model fit take 88 s on a busy host.
 
 ## Project layout
 
@@ -155,7 +167,7 @@ smart_inventory/
   pipeline/        ingest · data quality · daily cycle · scheduler
   engines/         E1 signal · E2 classifier · E3 forecast · E4 replenishment · E5 sourcing
                    E6 bounce-to-stock · E7 pricing · E8 orchestrator · compliance gates
-  agents/          Claude: supplier parser · explainer · insights · operations
+  agents/          Claude: supplier parser · explainer · insights · operations · regulatory alerts
   api/             REST API (channels + console) · web/ console
   analytics.py     KPIs and the four management views (single source of truth)
 scripts/           run_demo.py · reference_erp_server.py
